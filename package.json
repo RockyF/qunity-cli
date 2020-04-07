@@ -12,6 +12,9 @@
     "build:prod": "rollup -c --environment BUILD:production"
   },
   "dependencies": {
+    "@rollup/plugin-commonjs": "^11.0.2",
+    "@rollup/plugin-json": "^4.0.2",
+    "@rollup/plugin-node-resolve": "^7.1.1",
     "chalk": "^3.0.0",
     "chokidar": "^3.3.1",
     "commander": "^5.0.0",

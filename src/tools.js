@@ -2,7 +2,9 @@
  * Created by rockyl on 2018/7/5.
  */
 
-import {spawn} from 'child_process'
+import {spawn} from 'child_process';
+import crypto from 'crypto';
+import fs from "fs";
 
 export function exit(err, code = 1) {
 	console.error(err);
@@ -49,4 +51,15 @@ export function npmInstall(path) {
 
 export function npmRun(path, scriptName) {
 	return childProcess('npm', ['run', scriptName], path);
+}
+
+export function getMd5(fileOrBuffer) {
+	let buffer = fileOrBuffer;
+	if (typeof fileOrBuffer === 'string') {
+		buffer = fs.readFileSync(fileOrBuffer);
+	}
+
+	let hash = crypto.createHash('md5');
+	hash.update(buffer);
+	return hash.digest('hex');
 }

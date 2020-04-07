@@ -6,16 +6,22 @@ function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'defau
 
 var glob$1 = _interopDefault(require('glob'));
 var chalk = _interopDefault(require('chalk'));
-var fs$1 = _interopDefault(require('fs'));
+var fs$2 = _interopDefault(require('fs'));
 var uuid = require('uuid');
 var chokidar = _interopDefault(require('chokidar'));
 var child_process = require('child_process');
+var crypto = _interopDefault(require('crypto'));
 var path$1 = _interopDefault(require('path'));
 var serveHandler = _interopDefault(require('serve-handler'));
 var http = _interopDefault(require('http'));
 var https = _interopDefault(require('https'));
 var rollup = _interopDefault(require('rollup'));
 var typescript = _interopDefault(require('typescript'));
+var rpt = _interopDefault(require('rollup-plugin-typescript'));
+var rollupPluginUglify = require('rollup-plugin-uglify');
+var resolve = _interopDefault(require('@rollup/plugin-node-resolve'));
+var commonjs = _interopDefault(require('@rollup/plugin-commonjs'));
+var json = _interopDefault(require('@rollup/plugin-json'));
 var chalk$1 = _interopDefault(require('chalk/source'));
 
 /**
@@ -69,6 +75,325 @@ function npmRun(path, scriptName) {
 	return childProcess('npm', ['run', scriptName], path);
 }
 
+function getMd5(fileOrBuffer) {
+	let buffer = fileOrBuffer;
+	if (typeof fileOrBuffer === 'string') {
+		buffer = fs$2.readFileSync(fileOrBuffer);
+	}
+
+	let hash = crypto.createHash('md5');
+	hash.update(buffer);
+	return hash.digest('hex');
+}
+
+/**
+ * Created by rockyl on 2020-03-18.
+ */
+
+const ts = require('typescript');
+const fs = require('fs');
+
+const {
+	ClassDeclaration, EnumDeclaration, ExportKeyword, DefaultKeyword,
+	PropertyDeclaration, MethodDeclaration,
+	TypeReference, AnyKeyword, NumberKeyword, StringKeyword, BooleanKeyword,
+	NumericLiteral, StringLiteral, TrueKeyword, FalseKeyword,
+	PrivateKeyword, ProtectedKeyword, StaticKeyword,
+	NewExpression, PropertyAccessExpression, ObjectLiteralExpression, ArrayLiteralExpression,
+} = ts.SyntaxKind;
+
+const filterModifiers = [PrivateKeyword, ProtectedKeyword, StaticKeyword,];
+const filterDecorators = ['hidden'];
+const filterNamePrefix = ['_', '$'];
+
+const typeMapping = {
+	[AnyKeyword]: 'any',
+	[NumberKeyword]: 'number',
+	[StringKeyword]: 'string',
+	[BooleanKeyword]: 'boolean',
+};
+
+const defaultTypeMapping = {
+	[NumericLiteral]: 'number',
+	[StringLiteral]: 'string',
+	[TrueKeyword]: 'boolean',
+	[FalseKeyword]: 'boolean',
+};
+
+const editorInstructs = ['if'];
+
+const vector2Properties = ['x', 'y'];
+
+function generateDeclaration(scriptFile) {
+	let code = fs.readFileSync(scriptFile, 'utf-8');
+	console.time('parse');
+	let sourceFile = ts.createSourceFile('test.ts', code, ts.ScriptTarget.ES2015);
+	console.timeEnd('parse');
+
+	let enums = [];
+	let components = [];
+	let declaration;
+	ts.forEachChild(sourceFile, function (node) {
+		switch (node.kind) {
+			case ClassDeclaration:
+				if (
+					node.modifiers && node.modifiers.length >= 2 &&
+					node.modifiers[0].kind === ExportKeyword &&
+					node.modifiers[1].kind === DefaultKeyword
+				) {
+					let props = [];
+					let methods = [];
+					declaration = {
+						name: node.name.text,
+						props,
+						methods,
+					};
+					putComment(node, declaration);
+
+					let prop;
+					for (let member of node.members) {
+						let name = member.name.text;
+						if (filterMember(member, name)) {
+							continue;
+						}
+						switch (member.kind) {
+							case PropertyDeclaration:
+								prop = getProp(member);
+								putEditorTag(member, prop);
+								if (prop.type && prop.type !== 'any') {
+									props.push(prop);
+								}
+								break;
+							case MethodDeclaration:
+								let method = {
+									name,
+								};
+								putComment(member, method);
+								if (member.parameters && member.parameters.length > 0) {
+									let parameters = method.parameters = [];
+									for (let parameter of member.parameters) {
+										let p = getProp(parameter);
+										if (parameter.questionToken) {
+											p.optional = true;
+										}
+										parameters.push(p);
+									}
+								}
+								methods.push(method);
+								break;
+						}
+					}
+
+					components.push(declaration);
+				}
+				break;
+			case EnumDeclaration:
+				let members = [];
+				declaration = {
+					name: node.name.text,
+					members,
+				};
+				putComment(node, declaration);
+
+				for (let member of node.members) {
+					let item = {
+						label: member.name.text,
+					};
+					let defaultValue = getDefaultValue(member);
+					if (defaultValue) {
+						item.value = defaultValue.value;
+					}
+					putComment(member, item);
+					members.push(item);
+				}
+
+				enums.push(declaration);
+				break;
+		}
+
+		return null;
+	});
+
+	let result = {};
+	if (enums.length > 0) {
+		result.enums = enums;
+	}
+	if (components.length > 0) {
+		result.components = components;
+	}
+	return result;
+}
+
+function filterMember(node, name) {
+	let skip = false;
+	for (let prefix of filterNamePrefix) {
+		if (name.startsWith(prefix)) {
+			skip = true;
+			break;
+		}
+	}
+	if (!skip && node.modifiers) {
+		for (let modifier of node.modifiers) {
+			if (filterModifiers.includes(modifier.kind)) {
+				skip = true;
+				break;
+			}
+		}
+	}
+	if (!skip && node.decorators && node.decorators.length > 0) {
+		for (let decorator of node.decorators) {
+			if (filterDecorators.includes(decorator.expression.text)) {
+				skip = true;
+				break;
+			}
+		}
+	}
+
+	return skip;
+}
+
+function getType(node) {
+	if (node.type) {
+		let type = node.type;
+		if (type.kind === TypeReference) {
+			return type.typeName.text;
+		} else {
+			return typeMapping[type.kind];
+		}
+	}
+}
+
+function getDefaultValue(node, preType) {
+	if (node.initializer) {
+		let value, type, init, initializer = node.initializer;
+		switch (initializer.kind) {
+			case NewExpression:
+				switch (preType) {
+					case 'Vector2':
+						value = [];
+						for (let i = 0, li = initializer.arguments.length; i < li; i++) {
+							const argument = initializer.arguments[i];
+							init = getInitializer(argument);
+							value.push(init.value);
+						}
+						break;
+				}
+				break;
+			case PropertyAccessExpression:
+				if (initializer.expression) {
+					type = initializer.expression.text;
+				}
+				value = node.initializer.name.text;
+				break;
+			case ArrayLiteralExpression: //数组暂时不识别
+				//type = 'array';
+				break;
+			case ObjectLiteralExpression:
+				switch (preType) {
+					case 'vector2':
+						value = {};
+						for (let property of initializer.properties) {
+							init = getInitializer(property.initializer);
+							let field = property.name.escapedText;
+							if (vector2Properties.includes(field)) {
+								value[field] = init.value;
+							}
+						}
+						break;
+				}
+				break;
+			default:
+				init = getInitializer(initializer);
+				type = init.type;
+				value = init.value;
+		}
+		let dv = {
+			value,
+		};
+		if (type !== undefined) {
+			dv.type = type;
+		}
+		return dv;
+	}
+}
+
+function getInitializer(initializer) {
+	let value, type = defaultTypeMapping[initializer.kind];
+	let text = initializer.text;
+	switch (initializer.kind) {
+		case NumericLiteral:
+			value = parseFloat(text);
+			break;
+		case StringLiteral:
+			value = text;
+			break;
+		case TrueKeyword:
+			value = true;
+			break;
+		case FalseKeyword:
+			value = false;
+			break;
+	}
+
+	return {type, value};
+}
+
+function getComment(node) {
+	if (node.jsDoc) {
+		let jsDoc = node.jsDoc[node.jsDoc.length - 1];
+		return jsDoc.comment;
+	}
+}
+
+function putComment(node, target) {
+	let c = getComment(node);
+	if (c) {
+		target.comment = c;
+	}
+}
+
+function putEditorTag(node, target) {
+	if (node.jsDoc) {
+		let jsDoc = node.jsDoc[node.jsDoc.length - 1];
+		if (jsDoc.tags) {
+			let instructions = {};
+			for (let tag of jsDoc.tags) {
+				let tagName = tag.tagName.text;
+				if (editorInstructs.includes(tagName)) {
+					instructions[tagName] = tag.comment;
+				}
+			}
+			if (Object.keys(instructions).length > 0) {
+				target.instructions = instructions;
+			}
+		}
+	}
+}
+
+function getProp(node) {
+	let name = node.name.text;
+
+	let type = getType(node);
+	let defaultValue = getDefaultValue(node, type);
+	if (!type) {
+		if (defaultValue && defaultValue.hasOwnProperty('type')) {
+			type = defaultValue.type;
+		} else {
+			type = 'any';
+		}
+	}
+
+	let prop = {
+		name,
+		type,
+	};
+	if (defaultValue && defaultValue.hasOwnProperty('value')) {
+		prop.default = defaultValue.value;
+	}
+	putComment(node, prop);
+	return prop;
+}
+
 /**
  * Created by rockyl on 2020-03-16.
  */
@@ -76,7 +401,7 @@ function npmRun(path, scriptName) {
 let t;
 
 function generateMetaFiles(watch = false) {
-	if (fs$1.existsSync('assets')) {
+	if (fs$2.existsSync('assets')) {
 		if (watch) {
 			console.log(chalk.blue('start watch assets folder to generate meta files'));
 			chokidar.watch('assets').on('all', (event, path) => {
@@ -100,10 +425,24 @@ function executeOnce() {
 	let files = glob$1.sync('assets/**/!(*.meta)');
 
 	for (let file of files) {
-		if (!fs$1.existsSync(file + '.meta')) {
+		if (!fs$2.existsSync(file + '.meta')) {
 			generateMetaFile(file);
 		}
 	}
+
+	let tsFiles = glob$1.sync('assets/**/*.ts');
+	console.time('generateDeclaration>');
+	for (let file of tsFiles) {
+		let meta = JSON.parse(fs$2.readFileSync(file + '.meta', 'utf-8'));
+		let md5 = getMd5(file);
+		if (meta.md5 !== md5) {
+			meta.declaration = generateDeclaration(file);
+			meta.md5 = md5;
+
+			saveMetaFile(file, meta);
+		}
+	}
+	console.timeEnd('generateDeclaration>');
 }
 
 function generateMetaFile(file) {
@@ -112,9 +451,15 @@ function generateMetaFile(file) {
 		uuid: uuid.v4(),
 	};
 
-	fs$1.writeFileSync(file + '.meta', JSON.stringify(meta, null, '\t'));
+	saveMetaFile(file, meta);
 
 	console.log(chalk.green('generate ' + file + '.meta'));
+
+	return meta;
+}
+
+function saveMetaFile(file, meta){
+	fs$2.writeFileSync(file + '.meta', JSON.stringify(meta, null, '\t'));
 }
 
 /**
@@ -122,7 +467,7 @@ function generateMetaFile(file) {
  */
 
 function clearMetaFiles() {
-	if (fs$1.existsSync('assets')) {
+	if (fs$2.existsSync('assets')) {
 		executeOnce$1();
 		console.log(chalk.cyan('clear meta files successfully'));
 	} else {
@@ -135,8 +480,8 @@ function executeOnce$1() {
 
 	for (let file of files) {
 		let bodyFile = file.replace('.meta', '');
-		if (!fs$1.existsSync(bodyFile)) {
-			fs$1.unlinkSync(file);
+		if (!fs$2.existsSync(bodyFile)) {
+			fs$2.unlinkSync(file);
 			console.log(chalk.green('remove ' + file + '.meta'));
 		}
 	}
@@ -170,11 +515,11 @@ function startHttpServe(options) {
 		const {port, host, folder, keyFile, certFile} = options;
 
 		publicPath = path$1.resolve(folder);
-		if (fs$1.existsSync(publicPath)) {
+		if (fs$2.existsSync(publicPath)) {
 			let sslOpts;
 			if (keyFile && certFile) {
-				const keyContent = fs$1.readFileSync(keyFile, 'utf8'),
-					certContent = fs$1.readFileSync(certFile, 'utf8');
+				const keyContent = fs$2.readFileSync(keyFile, 'utf8'),
+					certContent = fs$2.readFileSync(certFile, 'utf8');
 
 				if (keyContent && certContent) {
 					sslOpts = {
@@ -213,16 +558,19 @@ function startHttpServe(options) {
  * Created by rockyl on 2020-03-16.
  */
 
-const fs = require('fs');
+const fs$1 = require('fs');
 const path = require('path');
 const glob = require('glob');
 
 const targetId = 'register-scripts';
 
 function getModuleName(file) {
-	//let namespace = path.relative('./', file);
-	let metaContent = JSON.parse(fs.readFileSync(file + '.meta', 'utf-8'));
-	let fileContent = fs.readFileSync(file, 'utf-8');
+	let metaFile = file + '.meta';
+	if(!fs$1.existsSync(metaFile)){
+		return;
+	}
+	let metaContent = JSON.parse(fs$1.readFileSync(metaFile, 'utf-8'));
+	let fileContent = fs$1.readFileSync(file, 'utf-8');
 	let result = fileContent.match(/export default class (\w+)/);
 
 	if (result) {
@@ -239,8 +587,10 @@ function getScripts() {
 		const file = files[i];
 		let moduleName = getModuleName(file);
 		if (moduleName) {
+			let localModuleName = '/' + path.relative('./assets', file).replace('.ts', '');
 			scriptsImportList.push(`import {default as script_${i}} from "${file}";`);
 			scriptsList.push(`'${moduleName}': script_${i},`);
+			scriptsList.push(`'${localModuleName}': script_${i},`);
 		}
 	}
 
@@ -252,7 +602,7 @@ export default function register(app) {
 ${scriptsList.join('\n')}
 	});
 }
-				`;
+`;
 }
 
 function dealScriptsDependencies(options) {
@@ -282,9 +632,6 @@ function dealScriptsDependencies(options) {
  * Created by rockyl on 2020-03-18.
  */
 
-const rpt = require('rollup-plugin-typescript');
-const {uglify} = require('rollup-plugin-uglify');
-
 const defaultOptions = {
 	prod: false,
 	moduleName: 'qunity-game',
@@ -301,12 +648,19 @@ const adaptorExternalMap = {
 };
 
 const inputFile = 'src/index.ts';
+let t$1;
 
 async function compile(options, watch = false) {
-	if (!fs$1.existsSync('src/index.ts')) {
+	if (!fs$2.existsSync('src/index.ts')) {
 		exit(`file [${inputFile}] not exists`, 1);
 	}
 	let externals = adaptorExternalMap[options.adaptor];
+	let manifestExternals = {};
+
+	if(fs$2.existsSync('manifest.json')){
+		let manifest = JSON.parse(fs$2.readFileSync('manifest.json'));
+		manifestExternals = manifest.externals;
+	}
 	if (!externals) {
 		exit(`adaptor [${options.adaptor}] not exists`, 2);
 	}
@@ -319,22 +673,27 @@ async function compile(options, watch = false) {
 
 	let {prod, moduleName} = options;
 
-	externals = Object.assign({}, externals, defaultOptions.externals);
+	externals = Object.assign({}, externals, defaultOptions.externals, manifestExternals);
 
 	let inputOptions = {
 		input: inputFile,
 		plugins: [
+			json(),
 			dealScriptsDependencies(),
+			resolve({
+				browser: true,
+			}),
 			rpt({
 				typescript,
 				include: ['src/**/*.ts+(|x)', 'assets/**/*.ts+(|x)']
 			}),
+			commonjs(),
 		],
 		external: Object.keys(externals),
 	};
 
 	if (prod) {
-		inputOptions.plugins.push(uglify({}));
+		inputOptions.plugins.push(rollupPluginUglify.uglify({}));
 	}
 
 	let outputOptions = {
@@ -354,11 +713,14 @@ async function compile(options, watch = false) {
 
 		watcher.on('event', event => {
 			switch (event.code) {
+				case 'START':
+					console.log(chalk$1.cyan('start building...'));
+					break;
 				case 'END':
 					console.log(chalk$1.cyan('build project successfully'));
 					break;
 				case 'ERROR':
-					console.warn(e);
+					console.warn(event);
 					break;
 			}
 			// event.code 会是下面其中一个：
@@ -368,6 +730,20 @@ async function compile(options, watch = false) {
 			//   END          — 完成所有文件束构建
 			//   ERROR        — 构建时遇到错误
 			//   FATAL        — 遇到无可修复的错误
+		});
+
+		chokidar.watch('assets',{
+			//ignored: /^.+(?<!\.ts)$/,
+			ignoreInitial: true,
+		}).on('all', (event, path) => {
+			if(event === 'add' && path.endsWith('.ts')){
+				//console.log(event, path);
+				if (t$1) {
+					clearTimeout(t$1);
+					t$1 = null;
+				}
+				t$1 = setTimeout(modifyNeedCompile, 500);
+			}
 		});
 	} else {
 		try {
@@ -382,12 +758,18 @@ async function compile(options, watch = false) {
 	}
 }
 
+function modifyNeedCompile(){
+	let content = fs$2.readFileSync('src/need-compile.ts');
+	fs$2.writeFileSync('src/need-compile.ts', content);
+}
+
 exports.childProcess = childProcess;
 exports.clearMetaFiles = clearMetaFiles;
 exports.compile = compile;
 exports.exit = exit;
 exports.generateMetaFile = generateMetaFile;
 exports.generateMetaFiles = generateMetaFiles;
+exports.getMd5 = getMd5;
 exports.gitClone = gitClone;
 exports.npmInstall = npmInstall;
 exports.npmRun = npmRun;

@@ -7,7 +7,8 @@ import chalk from 'chalk'
 import fs from 'fs'
 import {v4 as generateUUID} from "uuid"
 import chokidar from 'chokidar'
-import {exit} from "../tools";
+import {exit, getMd5} from "../tools";
+import {generateDeclaration} from "../ts-declare-generator";
 
 let t;
 
@@ -40,6 +41,20 @@ function executeOnce() {
 			generateMetaFile(file);
 		}
 	}
+
+	let tsFiles = glob.sync('assets/**/*.ts');
+	console.time('generateDeclaration>');
+	for (let file of tsFiles) {
+		let meta = JSON.parse(fs.readFileSync(file + '.meta', 'utf-8'));
+		let md5 = getMd5(file);
+		if (meta.md5 !== md5) {
+			meta.declaration = generateDeclaration(file);
+			meta.md5 = md5;
+
+			saveMetaFile(file, meta);
+		}
+	}
+	console.timeEnd('generateDeclaration>');
 }
 
 export function generateMetaFile(file) {
@@ -48,7 +63,13 @@ export function generateMetaFile(file) {
 		uuid: generateUUID(),
 	};
 
-	fs.writeFileSync(file + '.meta', JSON.stringify(meta, null, '\t'));
+	saveMetaFile(file, meta);
 
 	console.log(chalk.green('generate ' + file + '.meta'));
+
+	return meta;
+}
+
+function saveMetaFile(file, meta){
+	fs.writeFileSync(file + '.meta', JSON.stringify(meta, null, '\t'));
 }
