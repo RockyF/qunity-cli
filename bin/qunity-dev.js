@@ -10,6 +10,8 @@ const subCommands = [
 	'serve',
 ];
 
+let subProcesses;
+
 (async function () {
 	let args = process.argv.slice(2);
 	args.push('-w');
@@ -18,7 +20,19 @@ const subCommands = [
 		console.log('start sub command: ' + cmd);
 		return childProcess('node', [__dirname + '/qunity-' + cmd + '.js', ...args], cwd);
 	});
-	await Promise.all(ps);
+	subProcesses = await Promise.all(ps);
 })().catch(e => {
 	exit(e);
 });
+
+process.on('exit', destroySubProcesses);
+process.on('SIGINT', destroySubProcesses);
+process.on('SIGTERM', destroySubProcesses);
+
+function destroySubProcesses() {
+	if (subProcesses) {
+		for(let subProcess of subProcesses){
+			subProcess.kill();
+		}
+	}
+}

@@ -12,24 +12,30 @@ export function exit(err, code = 1) {
 }
 
 export function childProcess(cmd, params, cwd, printLog = true) {
+	let options = {};
+	if (cwd) {
+		options.cwd = cwd;
+	}
+	const proc = spawn(cmd, params, options);
+
+	if (printLog) {
+		proc.stdout.on('data', (data) => {
+			let txt = data.toString();
+			txt = txt.substr(0, txt.length - 1);
+			console.log(txt);
+		});
+
+		proc.stderr.on('data', (data) => {
+			console.log(data.toString());
+		});
+	}
+
+	return proc;
+}
+
+export function childProcessSync(cmd, params, cwd, printLog = true) {
 	return new Promise((resolve, reject) => {
-		let options = {};
-		if (cwd) {
-			options.cwd = cwd;
-		}
-		const proc = spawn(cmd, params, options);
-
-		if (printLog) {
-			proc.stdout.on('data', (data) => {
-				let txt = data.toString();
-				txt = txt.substr(0, txt.length - 1);
-				console.log(txt);
-			});
-
-			proc.stderr.on('data', (data) => {
-				console.log(data.toString());
-			});
-		}
+		let proc = childProcess(cmd, params, cwd, printLog);
 
 		proc.on('close', (code) => {
 			if (code === 0) {
@@ -42,15 +48,15 @@ export function childProcess(cmd, params, cwd, printLog = true) {
 }
 
 export function gitClone(url, path) {
-	return childProcess('git', ['clone', url, path]);
+	return childProcessSync('git', ['clone', url, path]);
 }
 
 export function npmInstall(path) {
-	return childProcess('npm', ['i'], path);
+	return childProcessSync('npm', ['i'], path);
 }
 
 export function npmRun(path, scriptName) {
-	return childProcess('npm', ['run', scriptName], path);
+	return childProcessSync('npm', ['run', scriptName], path);
 }
 
 export function getMd5(fileOrBuffer) {
