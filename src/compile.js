@@ -3,7 +3,6 @@
  */
 
 import fs from 'fs'
-import path from 'path'
 import rollup from 'rollup'
 import typescript from 'typescript'
 import rpt from 'rollup-plugin-typescript';
@@ -16,9 +15,11 @@ import chalk from "chalk/source";
 import {exit} from "./tools";
 import chokidar from "chokidar";
 
+const devOutputFile = 'debug/index.js';
+const prodOutputFile = 'debug/index.min.js';
+
 const defaultOptions = {
 	prod: false,
-	moduleName: 'qunity-game',
 	externals: {
 		qunity: 'qunity',
 	},
@@ -38,16 +39,6 @@ export async function compile(options, watch = false) {
 	if (!fs.existsSync('src/index.ts')) {
 		exit(`file [${inputFile}] not exists`, 1);
 	}
-	let externals = adaptorExternalMap[options.adaptor];
-	let manifestExternals = {};
-
-	if(fs.existsSync('manifest.json')){
-		let manifest = JSON.parse(fs.readFileSync('manifest.json'));
-		manifestExternals = manifest.externals;
-	}
-	if (!externals) {
-		exit(`adaptor [${options.adaptor}] not exists`, 2);
-	}
 
 	if (options) {
 		options = Object.assign({}, defaultOptions, options);
@@ -55,7 +46,18 @@ export async function compile(options, watch = false) {
 		options = Object.assign({}, defaultOptions);
 	}
 
-	let {prod, moduleName} = options;
+	let {name: moduleName, engine: adaptor, externals: manifestExternals} = options.manifest;
+	let {prod, outputFile} = options;
+
+	if(!outputFile){
+		outputFile = prod ? prodOutputFile : devOutputFile;
+	}
+
+	let externals = adaptorExternalMap[adaptor];
+
+	if (!externals) {
+		exit(`adaptor [${adaptor}] not exists`, 2);
+	}
 
 	externals = Object.assign({}, externals, defaultOptions.externals, manifestExternals);
 
@@ -81,7 +83,7 @@ export async function compile(options, watch = false) {
 	}
 
 	let outputOptions = {
-		file: prod ? 'dist/bundle.min.js' : 'debug/bundle.js',
+		file: outputFile,
 		format: 'umd',
 		name: moduleName,
 		sourcemap: !prod,
@@ -116,11 +118,11 @@ export async function compile(options, watch = false) {
 			//   FATAL        — 遇到无可修复的错误
 		});
 
-		chokidar.watch('assets',{
+		chokidar.watch('assets', {
 			//ignored: /^.+(?<!\.ts)$/,
 			ignoreInitial: true,
 		}).on('all', (event, path) => {
-			if(event === 'add' && path.endsWith('.ts')){
+			if (event === 'add' && path.endsWith('.ts')) {
 				//console.log(event, path);
 				if (t) {
 					clearTimeout(t);
@@ -132,17 +134,17 @@ export async function compile(options, watch = false) {
 	} else {
 		try {
 			const bundle = await rollup.rollup(inputOptions);
-			await bundle.write(outputOptions);
 
+			await bundle.write(outputOptions);
 			console.log(chalk.cyan('build project successfully'));
-		}catch (e) {
+		} catch (e) {
 			console.warn(e);
 			exit('build project failed', 1);
 		}
 	}
 }
 
-function modifyNeedCompile(){
+function modifyNeedCompile() {
 	let content = fs.readFileSync('src/need-compile.ts');
 	fs.writeFileSync('src/need-compile.ts', content);
 }

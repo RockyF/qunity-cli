@@ -23,12 +23,14 @@ var resolve = _interopDefault(require('@rollup/plugin-node-resolve'));
 var commonjs = _interopDefault(require('@rollup/plugin-commonjs'));
 var json = _interopDefault(require('@rollup/plugin-json'));
 var chalk$1 = _interopDefault(require('chalk/source'));
+var fs$3 = _interopDefault(require('fs-extra'));
+var packSheet = _interopDefault(require('sheet-packer'));
 
 /**
  * Created by rockyl on 2018/7/5.
  */
 
-function exit(err, code = 1) {
+function exit$1(err, code = 1) {
 	console.error(err);
 	process.exit(code);
 }
@@ -423,7 +425,7 @@ function generateMetaFiles(watch = false) {
 			console.log(chalk.cyan('generate meta files successfully'));
 		}
 	} else {
-		exit('assets folder not exists', 1);
+		exit$1('assets folder not exists', 1);
 	}
 }
 
@@ -477,7 +479,7 @@ function clearMetaFiles() {
 		executeOnce$1();
 		console.log(chalk.cyan('clear meta files successfully'));
 	} else {
-		exit('assets folder not exists', 1);
+		exit$1('assets folder not exists', 1);
 	}
 }
 
@@ -638,9 +640,11 @@ function dealScriptsDependencies(options) {
  * Created by rockyl on 2020-03-18.
  */
 
+const devOutputFile = 'debug/index.js';
+const prodOutputFile = 'debug/index.min.js';
+
 const defaultOptions = {
 	prod: false,
-	moduleName: 'qunity-game',
 	externals: {
 		qunity: 'qunity',
 	},
@@ -658,17 +662,7 @@ let t$1;
 
 async function compile(options, watch = false) {
 	if (!fs$2.existsSync('src/index.ts')) {
-		exit(`file [${inputFile}] not exists`, 1);
-	}
-	let externals = adaptorExternalMap[options.adaptor];
-	let manifestExternals = {};
-
-	if(fs$2.existsSync('manifest.json')){
-		let manifest = JSON.parse(fs$2.readFileSync('manifest.json'));
-		manifestExternals = manifest.externals;
-	}
-	if (!externals) {
-		exit(`adaptor [${options.adaptor}] not exists`, 2);
+		exit$1(`file [${inputFile}] not exists`, 1);
 	}
 
 	if (options) {
@@ -677,7 +671,18 @@ async function compile(options, watch = false) {
 		options = Object.assign({}, defaultOptions);
 	}
 
-	let {prod, moduleName} = options;
+	let {name: moduleName, engine: adaptor, externals: manifestExternals} = options.manifest;
+	let {prod, outputFile} = options;
+
+	if(!outputFile){
+		outputFile = prod ? prodOutputFile : devOutputFile;
+	}
+
+	let externals = adaptorExternalMap[adaptor];
+
+	if (!externals) {
+		exit$1(`adaptor [${adaptor}] not exists`, 2);
+	}
 
 	externals = Object.assign({}, externals, defaultOptions.externals, manifestExternals);
 
@@ -703,7 +708,7 @@ async function compile(options, watch = false) {
 	}
 
 	let outputOptions = {
-		file: prod ? 'dist/bundle.min.js' : 'debug/bundle.js',
+		file: outputFile,
 		format: 'umd',
 		name: moduleName,
 		sourcemap: !prod,
@@ -738,11 +743,11 @@ async function compile(options, watch = false) {
 			//   FATAL        — 遇到无可修复的错误
 		});
 
-		chokidar.watch('assets',{
+		chokidar.watch('assets', {
 			//ignored: /^.+(?<!\.ts)$/,
 			ignoreInitial: true,
 		}).on('all', (event, path) => {
-			if(event === 'add' && path.endsWith('.ts')){
+			if (event === 'add' && path.endsWith('.ts')) {
 				//console.log(event, path);
 				if (t$1) {
 					clearTimeout(t$1);
@@ -754,31 +759,120 @@ async function compile(options, watch = false) {
 	} else {
 		try {
 			const bundle = await rollup.rollup(inputOptions);
-			await bundle.write(outputOptions);
 
+			await bundle.write(outputOptions);
 			console.log(chalk$1.cyan('build project successfully'));
-		}catch (e) {
+		} catch (e) {
 			console.warn(e);
-			exit('build project failed', 1);
+			exit$1('build project failed', 1);
 		}
 	}
 }
 
-function modifyNeedCompile(){
+function modifyNeedCompile() {
 	let content = fs$2.readFileSync('src/need-compile.ts');
 	fs$2.writeFileSync('src/need-compile.ts', content);
+}
+
+/**
+ * Created by rockyl on 2020-05-12.
+ */
+
+function getDoc(source) {
+	function requireMethod(id) {
+		if (id === 'qunity') {
+			return {
+				Doc: function () {
+					return {
+						kv: function (args) {
+							return args;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	let func = new Function('require', 'exports', source);
+	let exports = {};
+	func(requireMethod, exports);
+	return exports.doc;
+}
+
+/**
+ * Created by rockyl on 2020-05-12.
+ *
+ * pack project
+ */
+
+const releasePath = 'dist';
+
+async function pack(options) {
+	if (!fs$3.existsSync('manifest.json')) {
+		exit(`file [manifest.json] not exists`, 1);
+	}
+	let manifest = JSON.parse(fs$3.readFileSync('manifest.json'));
+
+	let releaseVersion = options.releaseVersion || Date.now().toString();
+	let projectReleasePath = path$1.join(releasePath, releaseVersion);
+	await fs$3.ensureDir(projectReleasePath);
+
+	//const bundleFile = await compileBundle(options, manifest, projectReleasePath);
+
+	await packSheets(projectReleasePath);
+	//await parseIndexHtml(projectReleasePath, bundleFile);
+	//await copyFiles(projectReleasePath);
+}
+
+async function packSheets(projectReleasePath) {
+	let assetsPath = 'assets';
+	let projectReleaseAssetsPath = path$1.join(projectReleasePath, 'assets');
+	await fs$3.ensureDir(projectReleaseAssetsPath);
+
+	let sceneFiles = glob$1.sync(assetsPath + '/**/*.scene');
+
+	for (let sceneFile of sceneFiles) {
+		let sceneContent = await fs$3.readFile(sceneFile, 'utf-8');
+		let doc = getDoc(sceneContent);
+		let assets = doc.assets;
+		let files = assets.map(asset => asset.url).filter(asset => asset.endsWith('.png'));
+		let {sheets, singles} = await packSheet(files, {maxSize: 512});
+
+		//console.log(assets, sheets, singles);
+		let sheetIndex = 0;
+		for (let {frames, buffer} of sheets) {
+			let keys = Object.keys(frames);
+			for (let url of keys) {
+				let asset = assets.find(asset => asset.url === url);
+				if (asset) {
+					let relativePath = path$1.relative('assets', url);
+					frames[relativePath] = frames[url];
+					delete frames[url];
+
+					frames[relativePath].uuid = asset.uuid;
+				}
+			}
+			await fs$3.writeFile(path$1.join(projectReleaseAssetsPath, 'sheet_' + sheetIndex + '.sht'), JSON.stringify(frames));
+			await fs$3.writeFile(path$1.join(projectReleaseAssetsPath, 'sheet_' + sheetIndex + '.png'), buffer);
+			sheetIndex++;
+		}
+		for(let single of singles){
+			await fs$3.copy(single, path$1.join(projectReleasePath, single));
+		}
+	}
 }
 
 exports.childProcess = childProcess;
 exports.childProcessSync = childProcessSync;
 exports.clearMetaFiles = clearMetaFiles;
 exports.compile = compile;
-exports.exit = exit;
+exports.exit = exit$1;
 exports.generateMetaFile = generateMetaFile;
 exports.generateMetaFiles = generateMetaFiles;
 exports.getMd5 = getMd5;
 exports.gitClone = gitClone;
 exports.npmInstall = npmInstall;
 exports.npmRun = npmRun;
+exports.pack = pack;
 exports.startHttpServe = startHttpServe;
 //# sourceMappingURL=index.js.map
